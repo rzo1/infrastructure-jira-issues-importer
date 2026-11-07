@@ -59,34 +59,21 @@ class Importer:
 
     def import_labels(self, colour_selector):
         """
-        Imports the gathered project components and labels as labels into GitHub 
+        Creates the final GitHub labels (already mapped and filtered by the project).
+        Labels that already exist in the repository are left untouched.
         """
         label_url = self.github_url + '/labels'
         print('Importing labels...', label_url)
-        print()
 
-        for lkey in self.project.get_all_labels().keys():
-
-            prefixed_lkey = lkey.lower()
-            print(f"lkey is: {lkey}")
-            # prefix component
-            if self.config.include_component_in_labels:
-                if lkey in self.project.get_components().keys():
-                    prefixed_lkey = 'jira-component:' + prefixed_lkey
-
-            if prefixed_lkey is None:
-                continue
-            prefixed_lkey = convert_label(prefixed_lkey, self.labels_mapping, self.approved_labels)
-            print(f"Prefixed lkey: {prefixed_lkey}")
-            data = {'name': prefixed_lkey,
-                    'color': colour_selector.get_colour(lkey)}
-            print(f"Data: {data}")
+        for label in self.project.get_all_labels().keys():
+            data = {'name': label, 'color': colour_selector.get_colour(label)}
             r = requests.post(label_url, json=data, headers=self.headers, timeout=Importer._DEFAULT_TIME_OUT)
             if r.status_code == 201:
-                print(lkey + '->' + prefixed_lkey)
+                print('created label', label)
+            elif r.status_code == 422 and 'already_exists' in str(r.json()):
+                print('label exists', label)
             else:
-                print('Failure importing label ' + prefixed_lkey,
-                      r.status_code, r.content, r.headers)
+                print('Failure importing label ' + label, r.status_code, r.text)
 
     def import_issues(self, start_from_count):
         """

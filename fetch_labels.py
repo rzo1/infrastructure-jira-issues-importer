@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Prints all Jira labels found in the configured XML export(s)."""
+"""
+Prints every label candidate (issue types, prefixed components and Jira labels) found in the
+configured XML export(s), with usage counts, followed by the resulting GitHub labels.
+The candidates are exactly the keys to use in the labels mapping file.
+"""
 
 from config import load_config
 from project import Project
@@ -14,8 +18,13 @@ def main():
         for item in f.channel.item:
             project.add_item(item)
 
-    for key in sorted(project.get_labels().keys()):
-        print(key)
+    for title, counts in (('Types', project.get_types()), ('Components', project.get_components()),
+                          ('Labels', project.get_labels()),
+                          ('GitHub labels (after mapping)', project.get_all_labels())):
+        print(f'# {title}')
+        for key in sorted(counts):
+            print(f'{key}  ({counts[key]})')
+        print()
 
 
 if __name__ == '__main__':

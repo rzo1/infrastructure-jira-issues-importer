@@ -24,8 +24,9 @@ class Project:
         self.name = config.jira_project
         self.doneStatusCategoryId = str(config.jira_done_id)
         self.jiraBaseUrl = config.jira_url_normalized
-        self._project = {'Milestones': defaultdict(int), 'Components': defaultdict(
-            int), 'Labels': defaultdict(int), 'Types': defaultdict(int), 'Issues': []}
+        self._project = {'Milestones': defaultdict(int), 'Components': defaultdict(int),
+                         'Labels': defaultdict(int), 'Types': defaultdict(int),
+                         'GitHubLabels': defaultdict(int), 'Issues': []}
 
         self.labels_mapping = fetch_labels_mapping(config.labels_mapping_file)
         self.approved_labels = fetch_allowed_labels(config.allowed_labels_file)
@@ -43,16 +44,12 @@ class Project:
         return self._project['Types']
 
     def get_all_labels(self):
-        merge = self._project['Components'].copy()
-        merge.update(self._project['Labels'])
-        merge.update(self._project['Types'])
-        merge.update({'imported-jira-issue': 0})
-        return merge
+        """The final GitHub labels (after mapping and allow list) with their usage count."""
+        return self._project['GitHubLabels']
 
     def get_labels(self):
-        merge = self._project['Labels'].copy()
-        merge.update({'imported-jira-issue': 0})
-        return merge
+        """The raw Jira labels (lower-cased, i.e. mapping file keys) with their usage count."""
+        return self._project['Labels']
 
     def add_item(self, item):
         itemProject = self._projectFor(item)
@@ -79,7 +76,7 @@ class Project:
         def hist(h):
             for key in h.keys():
                 print(('%30s (%5d): ' + h[key] * '#') % (key, h[key]))
-            print
+            print()
 
         print(self.name + ':\n  Milestones:')
         hist(self._project['Milestones'])
@@ -89,7 +86,8 @@ class Project:
         hist(self._project['Components'])
         print('  Labels:')
         hist(self._project['Labels'])
-        print
+        print('  GitHub labels (after mapping):')
+        hist(self._project['GitHubLabels'])
         print('Total Issues to Import: %d' % len(self._project['Issues']))
 
     def _projectFor(self, item):
@@ -138,29 +136,7 @@ class Project:
         body = body + '\n<li><b>imported</b>: ' + datetime.today().strftime('%Y-%m-%d')
         body = body + '\n</ul></i>\n</details>'
 
-        # retrieve jira components and labels as github labels
-        labels = []
-
-        # set a default component if empty or missing
-        components = [c.text for c in _children(item, 'component') if c.text] or ['miscellaneous']
-        for component in components:
-            if self.config.include_component_in_labels:
-                labels.append('jira-component:' + component.lower())
-                labels.append(component.lower())
-
-        if len(_children(item, 'labels/label')) == 0:
-            pass
-        else:
-            labels.append(self._jira_type_mapping(item.type.text.lower()))
-
-        for label in _children(item, 'labels/label'):
-            converted_label = convert_label(label.text.strip().lower(), self.labels_mapping, self.approved_labels)
-            if converted_label is not None:
-                labels.append(converted_label)
-
-        labels.append('imported-jira-issue')
-
-        unique_labels = list(set(labels))
+        unique_labels = self._github_labels(item)
 
         self._project['Issues'].append({'title': item.title.text,
                                         'key': item.key.text,
@@ -180,21 +156,38 @@ class Project:
         if not self._project['Issues'][-1]['closed_at']:
             del self._project['Issues'][-1]['closed_at']
 
-    def _jira_type_mapping(self, issue_type):
-        if issue_type == 'bug':
-            return 'bug'
-        if issue_type == 'improvement':
-            return 'rfe'
-        if issue_type == 'new feature':
-            return 'rfe'
-        if issue_type == 'task':
-            return 'rfe'
-        if issue_type == 'story':
-            return 'rfe'
-        if issue_type == 'patch':
-            return 'rfe'
-        if issue_type == 'epic':
-            return 'epic'
+    def label_candidates(self, item):
+        """
+        Returns the (kind, candidate label) pairs of an item before mapping. The candidate is
+        what has to be used as key in the labels mapping file:
+        the lower-cased issue type, the configured component prefix plus the lower-cased
+        component, and the lower-cased Jira label.
+        """
+        candidates = []
+        issue_type = _child(item, 'type')
+        if issue_type is not None and issue_type.text:
+            candidates.append(('type', issue_type.text.strip().lower()))
+        if self.config.include_component_in_labels:
+            for component in _children(item, 'component'):
+                if component.text and component.text.strip():
+                    candidates.append(('component', self.config.component_label_prefix + component.text.strip().lower()))
+        for label in _children(item, 'labels/label'):
+            if label.text and label.text.strip():
+                candidates.append(('label', label.text.strip().lower()))
+        return candidates
+
+    def _github_labels(self, item):
+        """Maps the item's type, components and labels to the final GitHub labels."""
+        labels = []
+        for _, candidate in self.label_candidates(item):
+            converted = convert_label(candidate, self.labels_mapping, self.approved_labels)
+            if converted and converted not in labels:
+                labels.append(converted)
+        if self.config.imported_label and self.config.imported_label not in labels:
+            labels.append(self.config.imported_label)
+        for label in labels:
+            self._project['GitHubLabels'][label] += 1
+        return labels
 
     def _convert_to_iso(self, timestamp):
         dt = parse(timestamp)
@@ -209,36 +202,10 @@ class Project:
             self._project['Issues'][-1]['milestone_name'] = versions[0]
 
     def _add_labels(self, item):
-        try:
-            self._project['Components'][item.component.text] += 1
-            tmp_l = item.component.text.trim()
-            if tmp_l == 'Bug':
-                tmp_l = 'bug'
-
-            self._project['Issues'][-1]['labels'].append(tmp_l)
-        except AttributeError:
-            pass
-        
-        try:
-            for label in item.labels.label:
-                self._project['Labels'][label.text] += 1
-                tmp_l = label.text.trim()
-                if tmp_l == 'Bug':
-                    tmp_l = 'bug'
-
-                self._project['Issues'][-1]['labels'].append(tmp_l)
-        except AttributeError:
-            pass
-
-        try:
-            self._project['Types'][item.type.text] += 1
-            tmp_l = item.type.text.trim()
-            if tmp_l == 'Bug':
-                tmp_l = 'bug'
-
-            self._project['Issues'][-1]['labels'].append(tmp_l)
-        except AttributeError:
-            pass
+        """Collects the raw Jira types, components and labels for the overview (prettify)."""
+        kinds = {'type': 'Types', 'component': 'Components', 'label': 'Labels'}
+        for kind, candidate in self.label_candidates(item):
+            self._project[kinds[kind]][candidate] += 1
 
     def _add_subtasks(self, item):
         try:
