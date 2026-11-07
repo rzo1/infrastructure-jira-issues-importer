@@ -56,6 +56,9 @@ class Config:
     # (with a link to the full text in Jira). Kept below the limit as a safety margin.
     max_text_length: int = 60000
 
+    # Jira commenter: template with {key}, {issue_url}, {repo_url}, {issue_number} placeholders
+    jira_comment_template_file: str = ''
+
     # Run control
     start_from: int = 0
     mapping_output_file: str = 'jira-keys-to-github-id.txt'
@@ -98,6 +101,7 @@ _FIELDS = {
     'imported_label': ('IMPORTED_LABEL', str),
     'skip_comment_authors': ('SKIP_COMMENT_AUTHORS', _as_list),
     'max_text_length': ('MAX_TEXT_LENGTH', int),
+    'jira_comment_template_file': ('JIRA_COMMENT_TEMPLATE_FILE', str),
     'start_from': ('START_FROM', int),
     'mapping_output_file': ('MAPPING_OUTPUT_FILE', str),
     'assume_yes': ('ASSUME_YES', _as_bool),
