@@ -106,3 +106,12 @@ def test_skip_comment_authors_from_env():
     config = load_config(env={'JIRA_MIGRATION_JIRA_PROJECT_NAME': 'X', 'JIRA_MIGRATION_JIRA_URL': 'http://j',
                               'JIRA_MIGRATION_SKIP_COMMENT_AUTHORS': 'githubbot, hudson ,'}, ask=None)
     assert config.skip_comment_authors == ('githubbot', 'hudson')
+
+
+def test_attachments_are_linked_in_metadata(load_project):
+    body = issue(load_project(), 'TEST-1')['body']
+
+    assert '<b>attachments</b>:' in body
+    assert '<a href="https://jira.example.org/secure/attachment/555/stack%20trace.txt">stack trace.txt</a>' in body
+    assert '<a href="https://jira.example.org/secure/attachment/556/fix.patch">fix.patch</a>' in body
+    assert '<b>attachments</b>' not in issue(load_project(), 'TEST-2')['body']

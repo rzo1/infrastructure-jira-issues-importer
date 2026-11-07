@@ -172,6 +172,11 @@ class Project:
                 body = body + '\n<li><b>' + field + '</b>: ' + escape(value.text)
         if resolved is not None and resolved.text:
             body = body + '\n<li><b>resolved</b>: ' + self._convert_to_iso(resolved.text)
+        attachments = [a for a in _children(item, 'attachments/attachment') if a.get('id') and a.get('name')]
+        if attachments:
+            body = body + '\n<li><b>attachments</b>: ' + ', '.join(
+                '<a href="' + self.jiraBaseUrl + '/secure/attachment/' + quote(a.get('id')) + '/' + quote(a.get('name'))
+                + '">' + escape(a.get('name')) + '</a>' for a in attachments)
         body = body + '\n<li><b>imported</b>: ' + datetime.today().strftime('%Y-%m-%d')
         body = body + '\n</ul></i>\n</details>'
         issue_url = self.jiraBaseUrl + '/browse/' + item.key.text
