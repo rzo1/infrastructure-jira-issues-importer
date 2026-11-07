@@ -201,12 +201,12 @@ class Project:
         return dt.isoformat()
 
     def _add_milestone(self, item):
-        try:
-            self._project['Milestones'][item.fixVersion.text] += 1
-            # this prop will be deleted later:
-            self._project['Issues'][-1]['milestone_name'] = item.fixVersion.text.trim()
-        except AttributeError:
-            pass
+        # GitHub supports a single milestone per issue, so the first fixVersion is used
+        versions = [v.text.strip() for v in _children(item, 'fixVersion') if v.text and v.text.strip()]
+        if versions:
+            self._project['Milestones'][versions[0]] += 1
+            # this prop will be replaced by the GitHub milestone number later:
+            self._project['Issues'][-1]['milestone_name'] = versions[0]
 
     def _add_labels(self, item):
         try:

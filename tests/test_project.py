@@ -81,3 +81,13 @@ def test_escaped_markup_is_not_turned_into_tags(make_config):
     # otherwise GitHub treats <String> as an (unknown, dropped) HTML tag
     html = '<pre>List&lt;String&gt; tokens = new ArrayList&lt;&gt;();</pre>'
     assert project._htmlentitydecode(html) == html
+
+
+def test_first_fix_version_becomes_the_milestone(load_project):
+    project = load_project()
+
+    # GitHub supports a single milestone per issue: the first fixVersion is used (whitespace stripped)
+    assert issue(project, 'TEST-1')['milestone_name'] == '1.0.0'
+    assert issue(project, 'TEST-3')['milestone_name'] == '2.0.0'
+    assert 'milestone_name' not in issue(project, 'TEST-2')
+    assert dict(project.get_milestones()) == {'1.0.0': 1, '2.0.0': 1}

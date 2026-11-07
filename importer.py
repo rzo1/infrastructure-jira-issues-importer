@@ -18,72 +18,44 @@ class Importer:
 
         self.labels_mapping = fetch_labels_mapping(config.labels_mapping_file)
         self.approved_labels = fetch_allowed_labels(config.allowed_labels_file)
+        self._existing_milestones = set()
+
+    def _get_all_pages(self, url):
+        """GETs a paginated GitHub list resource, following the Link: rel="next" headers."""
+        results = []
+        while url:
+            response = requests.get(url, headers=self.headers, timeout=Importer._DEFAULT_TIME_OUT)
+            if response.status_code != 200:
+                raise RuntimeError(f'Failed to list {url}: {response.status_code} {response.text}')
+            results.extend(response.json())
+            url = response.links.get('next', {}).get('url')
+        return results
 
     def import_milestones(self):
         """
-        Imports the gathered project milestones into GitHub and remembers the created milestone ids
+        Maps the gathered Jira fix versions to GitHub milestones (matched by title),
+        creating the missing ones, and remembers the GitHub milestone numbers.
         """
         milestone_url = self.github_url + '/milestones'
+        milestones = self.project.get_milestones()
         print('Importing milestones...', milestone_url)
-        print
 
-        # Check existing first
-        existing = list()
+        for existing in self._get_all_pages(milestone_url + '?state=all&per_page=100'):
+            if existing['title'] in milestones:
+                milestones[existing['title']] = existing['number']
+                print(existing['title'], 'found:', existing['number'])
+                self._existing_milestones.add(existing['title'])
 
-        def get_milestone_list(url):
-            return requests.get(url, headers=self.headers,
-                                timeout=Importer._DEFAULT_TIME_OUT)
-
-        def get_next_page_url(url):
-            return url.replace('<', '').replace('>', '').replace('; rel="next"', '')
-
-        milestone_pages = list()
-        ms = get_milestone_list(milestone_url + '?state=all')
-        milestone_pages.append(ms.json())
-
-        if 'Link' in ms.headers:
-            links = ms.headers['Link'].split(',')
-            nextPageUrl = get_next_page_url(links[0])
-
-            while nextPageUrl is not None:
-                time.sleep(1)
-                nextPageUrl = None
-
-                for l in links:
-                    if 'rel="next"' in l:
-                        nextPageUrl = get_next_page_url(l)
-
-                if nextPageUrl is not None:
-                    ms = get_milestone_list(nextPageUrl)
-                    links = ms.headers['Link'].split(',')
-                    milestone_pages.append(ms.json())
-
-        for ms_json in milestone_pages:
-            for m in ms_json:
-                print(self.project.get_milestones().keys())
-                try:
-                    if m['title'] in self.project.get_milestones().keys():
-                        self.project.get_milestones()[m['title']] = m['number']
-                        print(m['title'], 'found')
-                        existing.append(m['title'])
-                except TypeError:
-                    pass
-
-        # Export new ones
-        for mkey in self.project.get_milestones().keys():
-            if mkey in existing:
+        for title in list(milestones.keys()):
+            if title in self._existing_milestones:
                 continue
-
-            data = {'title': mkey}
-            r = requests.post(milestone_url, json=data, headers=self.headers,
-                timeout=Importer._DEFAULT_TIME_OUT)
-
-            # overwrite histogram data with the actual milestone id now
-            if r.status_code == 201:
-                content = r.json()
-                self.project.get_milestones()[mkey] = content['number']
-                print(mkey)
-
+            r = requests.post(milestone_url, json={'title': title}, headers=self.headers,
+                              timeout=Importer._DEFAULT_TIME_OUT)
+            if r.status_code != 201:
+                raise RuntimeError(f'Failed to create milestone {title}: {r.status_code} {r.text}')
+            milestones[title] = r.json()['number']
+            self._existing_milestones.add(title)
+            print(title, 'created:', milestones[title])
 
     def import_labels(self, colour_selector):
         """
