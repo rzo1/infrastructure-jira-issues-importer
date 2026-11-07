@@ -26,11 +26,14 @@ def test_existing_milestones_are_reused_across_pages_and_missing_ones_created(ma
     fake_http.on('GET', '/milestones', list_milestones)
     fake_http.on('POST', '/milestones', lambda url, json, **kw: FakeResponse(201, {'number': 40, 'title': json['title']}))
 
-    Importer(config, project).import_milestones()
+    importer = Importer(config, project)
+    importer.import_milestones()
 
     created = [c[2]['json']['title'] for c in fake_http.calls_to('POST', '/milestones')]
     assert created == ['2.0.0']
-    assert dict(project.get_milestones()) == {'1.0.0': 12, '2.0.0': 40}
+    assert importer.milestone_numbers == {'1.0.0': 12, '2.0.0': 40}
+    # the project keeps the usage counts
+    assert dict(project.get_milestones()) == {'1.0.0': 1, '2.0.0': 1}
 
 
 def test_failed_milestone_creation_raises(make_config, sample_xml, fake_http):

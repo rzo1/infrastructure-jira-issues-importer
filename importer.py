@@ -9,6 +9,7 @@ from utils import fetch_labels_mapping, fetch_allowed_labels, convert_label
 
 class Importer:
     _DEFAULT_TIME_OUT = 120.0
+    _MAX_STATUS_CHECKS = 100
 
     def __init__(self, config, project):
         self.config = config
@@ -21,7 +22,7 @@ class Importer:
 
         self.labels_mapping = fetch_labels_mapping(config.labels_mapping_file)
         self.approved_labels = fetch_allowed_labels(config.allowed_labels_file)
-        self._existing_milestones = set()
+        self.milestone_numbers = {}  # milestone title -> GitHub milestone number
         self._imported_keys = {issue['key'] for issue in project.get_issues()}
 
     def _get_all_pages(self, url):
@@ -38,7 +39,8 @@ class Importer:
     def import_milestones(self):
         """
         Maps the gathered Jira fix versions to GitHub milestones (matched by title),
-        creating the missing ones, and remembers the GitHub milestone numbers.
+        creating the missing ones, and remembers the GitHub milestone numbers in
+        ``milestone_numbers``.
         """
         milestone_url = self.github_url + '/milestones'
         milestones = self.project.get_milestones()
@@ -46,20 +48,18 @@ class Importer:
 
         for existing in self._get_all_pages(milestone_url + '?state=all&per_page=100'):
             if existing['title'] in milestones:
-                milestones[existing['title']] = existing['number']
+                self.milestone_numbers[existing['title']] = existing['number']
                 print(existing['title'], 'found:', existing['number'])
-                self._existing_milestones.add(existing['title'])
 
-        for title in list(milestones.keys()):
-            if title in self._existing_milestones:
+        for title in milestones:
+            if title in self.milestone_numbers:
                 continue
             r = requests.post(milestone_url, json={'title': title}, headers=self.headers,
                               timeout=Importer._DEFAULT_TIME_OUT)
             if r.status_code != 201:
                 raise RuntimeError(f'Failed to create milestone {title}: {r.status_code} {r.text}')
-            milestones[title] = r.json()['number']
-            self._existing_milestones.add(title)
-            print(title, 'created:', milestones[title])
+            self.milestone_numbers[title] = r.json()['number']
+            print(title, 'created:', self.milestone_numbers[title])
 
     def import_labels(self, colour_selector):
         """
@@ -79,69 +79,70 @@ class Importer:
             else:
                 print('Failure importing label ' + label, r.status_code, r.text)
 
-    def import_issues(self, start_from_count):
+    _ISSUE_FIELDS = ('title', 'body', 'created_at', 'updated_at', 'closed', 'closed_at', 'labels', 'milestone')
+    _COMMENT_FIELDS = ('body', 'created_at')
+
+    def _already_imported(self):
+        """Jira keys listed in the mapping output file of a previous (partial) run."""
+        try:
+            with open(self.config.mapping_output_file, encoding='utf-8') as f:
+                return {line.split(':', 1)[0].strip() for line in f if ':' in line}
+        except FileNotFoundError:
+            return set()
+
+    def import_issues(self, start_from_count=0):
         """
-        Starts the issue import into GitHub:
-        First the milestone id is captured for the issue.
-        Then JIRA issue relationships are converted into comments.
-        After that, the comments are taken out of the issue and 
-        references to JIRA issues in comments are replaced with a placeholder    
+        Imports the issues (with comments) in order. Issues before index ``start_from_count``
+        and issues already listed in the mapping output file are skipped, so an aborted run
+        can simply be restarted.
         """
         print('Importing issues...')
+        already_imported = self._already_imported()
 
-        count = 0
-
-        for issue in self.project.get_issues():
-            if start_from_count > count:
-                count += 1
+        for count, issue in enumerate(self.project.get_issues()):
+            if count < start_from_count:
                 continue
+            if issue['key'] in already_imported:
+                print('Skipping already imported', issue['key'])
+                continue
+            print('Index =', count)
+            self.import_issue_with_comments(*self._to_payload(issue))
 
-            print("Index = ", count)
+    def _to_payload(self, issue):
+        """Builds the Issue Import API payload (only fields the API accepts) for one issue."""
+        issue = dict(issue, comments=list(issue['comments']))
+        self.convert_relationships_to_comments(issue)
 
-            if 'milestone_name' in issue:
-                issue['milestone'] = self.project.get_milestones()[
-                    issue['milestone_name']]
-                del issue['milestone_name']
+        payload = {k: issue[k] for k in Importer._ISSUE_FIELDS if k in issue}
+        payload['labels'] = [label for label in issue['labels'] if label]
+        if 'milestone_name' in issue:
+            title = issue['milestone_name']
+            if title not in self.milestone_numbers:
+                raise RuntimeError(f'GitHub milestone for "{title}" ({issue["key"]}) is unknown; '
+                                   f'run import_milestones() first')
+            payload['milestone'] = self.milestone_numbers[title]
+        comments = [{k: c[k] for k in Importer._COMMENT_FIELDS if k in c} for c in issue['comments']]
+        return issue['key'], payload, comments
 
-            self.convert_relationships_to_comments(issue)
-
-            issue_comments = issue['comments']
-            del issue['comments']
-            comments = list(issue_comments)
-
-            self.import_issue_with_comments(issue, comments)
-            count += 1
-
-    def import_issue_with_comments(self, issue, comments):
+    def import_issue_with_comments(self, jira_key, issue, comments):
         """
         Imports a single issue with its comments into GitHub.
         Importing via GitHub's normal Issue API quickly triggers anti-abuse rate limits.
         So their unofficial Issue Import API is used instead:
         https://gist.github.com/jonmagic/5282384165e0f86ef105
-        This is a two-step process:
-        First the issue with the comments is pushed to GitHub asynchronously.
-        Then GitHub is pulled in a loop until the issue import is completed.
-        Finally the issue github is noted.    
+        The issue is pushed asynchronously, then its import status is polled until done.
+        The resulting "JIRA-KEY:github number" is appended to the mapping output file.
         """
-        print('Issue ', issue['key'])
-        issue['labels'] = [label for label in issue['labels'] if label]
-        print('Labels', issue['labels'])
-        jira_key = issue['key']
-        del issue['key']
-
-        print(f"issues: {issue}")
-        print(f"comments: {comments}")
+        print('Issue', jira_key, 'labels', issue['labels'], 'comments', len(comments))
 
         response = self.upload_github_issue(issue, comments)
         status_url = response.json()['url']
         gh_issue_url = self.wait_for_issue_creation(status_url).json()['issue_url']
         gh_issue_id = int(gh_issue_url.split('/')[-1])
-        issue['githubid'] = gh_issue_id
-        issue['key'] = jira_key
 
-        jira_gh = f"{jira_key}:{gh_issue_id}\n"
-        with open(self.config.mapping_output_file, 'a') as f:
-            f.write(jira_gh)
+        with open(self.config.mapping_output_file, 'a', encoding='utf-8') as f:
+            f.write(f'{jira_key}:{gh_issue_id}\n')
+        return gh_issue_id
 
     def upload_github_issue(self, issue, comments):
         """
@@ -170,10 +171,10 @@ class Importer:
         If the status is 'pending', it sleeps, then rechecks until the status is
         either 'imported' or 'failed'.
         """
-        while True:  # keep checking until status is something other than 'pending'
+        for _ in range(Importer._MAX_STATUS_CHECKS):
             time.sleep(3)
-            response = requests.get(status_url, headers=self.headers, 
-                timeout=Importer._DEFAULT_TIME_OUT)
+            response = requests.get(status_url, headers=self.headers,
+                                    timeout=Importer._DEFAULT_TIME_OUT)
             if response.status_code == 404:
                 continue
             elif response.status_code != 200:
@@ -185,6 +186,8 @@ class Importer:
             status = response.json()['status']
             if status != 'pending':
                 break
+        else:
+            raise RuntimeError(f'GitHub issue import {status_url} did not finish in time')
 
         if status == 'imported':
             print("Imported Issue:", response.json()['issue_url'].replace('api.github.com/repos/', 'github.com/'))
