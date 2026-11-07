@@ -2,9 +2,21 @@ from collections import defaultdict
 from html.entities import name2codepoint
 from dateutil.parser import parse
 from datetime import datetime
+from html import escape
+from urllib.parse import quote
 import re
 
 from utils import fetch_labels_mapping, fetch_allowed_labels, convert_label
+
+
+def _child(item, name):
+    """Returns the first child element called ``name`` or None if it does not exist."""
+    return item.find(name)
+
+
+def _children(item, path):
+    """Returns all elements matching ``path`` (may be empty)."""
+    return item.findall(path)
 
 
 class Project:
@@ -89,46 +101,42 @@ class Project:
             result = item.key.text.split('-')[0]
         return result
 
-    def _append_item_to_project(self, item):
-        # todo assignee
-        closed = str(item.statusCategory.get('id')) == self.doneStatusCategoryId
-        closed_at = ''
-        if closed:
-            try:
-                closed_at = self._convert_to_iso(item.resolved.text)
-            except AttributeError:
-                pass
+    def _user_link(self, user):
+        username = user.get('username') or str(user)
+        return ('<a title="' + escape(str(user)) + '" href="' + self.jiraBaseUrl
+                + '/secure/ViewProfile.jspa?name=' + quote(username) + '">' + escape(username) + '</a>')
 
-        # TODO: ensure item.assignee/reporter.get('username') to avoid "JENKINSUSER12345"
-        # TODO: fixit in gh issues
-        # check if issue description is missing or empty and set a default
-        if not hasattr(item, 'description') or not item.description:
-            item.description = 'No Description'
-        body = self._htmlentitydecode(item.description.text)
+    def _append_item_to_project(self, item):
+        closed = str(item.statusCategory.get('id')) == self.doneStatusCategoryId
+        resolved = _child(item, 'resolved')
+        closed_at = ''
+        if closed and resolved is not None and resolved.text:
+            closed_at = self._convert_to_iso(resolved.text)
+
+        description = _child(item, 'description')
+        if description is None or not (description.text or '').strip():
+            body = 'No Description'
+        else:
+            body = self._htmlentitydecode(description.text)
 
         # metadata: original author & link
-
-        body = body + '\n\n---\n<details><summary><i>Originally reported by <a title="' + str(item.reporter) + '" href="' + self.jiraBaseUrl + '/secure/ViewProfile.jspa?name=' + item.reporter.get('username') + '">' + item.reporter.get('username') + '</a>, imported from: <a href="' + self.jiraBaseUrl + '/browse/' + item.key.text + '" target="_blank">' + item.title.text[item.title.text.index("]") + 2:len(item.title.text)] + '</a></i></summary>'
-        # metadata: assignee
+        summary = item.title.text[item.title.text.index("]") + 2:]
+        reporter = _child(item, 'reporter')
+        body = body + '\n\n---\n<details><summary><i>'
+        if reporter is not None:
+            body = body + 'Originally reported by ' + self._user_link(reporter) + ', '
+        body = body + 'imported from: <a href="' + self.jiraBaseUrl + '/browse/' + item.key.text + '" target="_blank">' + escape(summary) + '</a></i></summary>'
         body = body + '\n<i><ul>'
-        if item.assignee != 'Unassigned':
-            body = body + '\n<li><b>assignee</b>: <a title="' + str(item.assignee) + '" href="' + self.jiraBaseUrl + '/secure/ViewProfile.jspa?name=' + item.assignee.get('username') + '">' + item.assignee.get('username') + '</a>'
-        try:
-            body = body + '\n<li><b>status</b>: ' + item.status
-        except AttributeError:
-            pass
-        try:
-            body = body + '\n<li><b>priority</b>: ' + item.priority
-        except AttributeError:
-            pass
-        try:
-            body = body + '\n<li><b>resolution</b>: ' + item.resolution
-        except AttributeError:
-            pass
-        try:
-            body = body + '\n<li><b>resolved</b>: ' + self._convert_to_iso(item.resolved.text)
-        except AttributeError:
-            pass
+
+        assignee = _child(item, 'assignee')
+        if assignee is not None and assignee.get('username') not in (None, '-1'):
+            body = body + '\n<li><b>assignee</b>: ' + self._user_link(assignee)
+        for field in ('status', 'priority', 'resolution'):
+            value = _child(item, field)
+            if value is not None and value.text:
+                body = body + '\n<li><b>' + field + '</b>: ' + escape(value.text)
+        if resolved is not None and resolved.text:
+            body = body + '\n<li><b>resolved</b>: ' + self._convert_to_iso(resolved.text)
         body = body + '\n<li><b>imported</b>: ' + datetime.today().strftime('%Y-%m-%d')
         body = body + '\n</ul></i>\n</details>'
 
@@ -136,20 +144,18 @@ class Project:
         labels = []
 
         # set a default component if empty or missing
-        if not hasattr(item, 'component') or not item.component:
-            item.component = 'miscellaneous'
-        for component in item.component:
+        components = [c.text for c in _children(item, 'component') if c.text] or ['miscellaneous']
+        for component in components:
             if self.config.include_component_in_labels:
-                labels.append('jira-component:' + component.text.lower())
-                labels.append(component.text.lower())
-                print("Debug: component.text.lower = {component.text.lower()}")
+                labels.append('jira-component:' + component.lower())
+                labels.append(component.lower())
 
-        if not hasattr(item, 'labels') or not item.labels:
+        if len(_children(item, 'labels/label')) == 0:
             pass
         else:
             labels.append(self._jira_type_mapping(item.type.text.lower()))
-        
-        for label in item.labels.findall('label'):
+
+        for label in _children(item, 'labels/label'):
             converted_label = convert_label(label.text.strip().lower(), self.labels_mapping, self.approved_labels)
             if converted_label is not None:
                 labels.append(converted_label)
@@ -296,7 +302,7 @@ class Project:
         except KeyError:
             print('2. KeyError at ' + item.key.text)
 
-        for customfield in item.customfields.findall('customfield'):
+        for customfield in _children(item, 'customfields/customfield'):
             if customfield.get('key') == 'com.pyxis.greenhopper.jira:gh-epic-link':
                 epic_key = customfield.customfieldvalues.customfieldvalue
                 self._project['Issues'][-1]['epic-link'] = epic_key

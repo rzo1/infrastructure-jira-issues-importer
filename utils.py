@@ -52,7 +52,8 @@ def convert_label(label, labels_mappings, approved_labels):
 
 
 def read_xml_file(file_path):
-    with open(file_path) as file:
+    # read bytes: lxml rejects str input that carries an <?xml encoding=...?> declaration
+    with open(file_path, 'rb') as file:
         return objectify.fromstring(file.read())
 
 
