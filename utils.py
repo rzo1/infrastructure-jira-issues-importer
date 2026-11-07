@@ -3,14 +3,14 @@ import os
 import glob
 
 
-def fetch_labels_mapping():
-    with open("labels_mapping.txt") as file:
+def fetch_labels_mapping(path="labels_mapping.txt"):
+    with open(path) as file:
         entry = [line.split("=") for line in file.readlines()]
     return {key.strip(): value.strip() for key, value in entry if key or value}
 
 
-def fetch_allowed_labels():
-    with open("allowed_labels.txt") as file:
+def fetch_allowed_labels(path="allowed_labels.txt"):
+    with open(path) as file:
         lines = (line.rstrip() for line in file.readlines())  # strip right-side whitespace
         lines = (line for line in lines if line) # remove blank lines
         return lines

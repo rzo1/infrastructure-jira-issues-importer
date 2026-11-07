@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-import os
+"""Prints all Jira labels found in the configured XML export(s)."""
 
+from config import load_config
 from project import Project
 from utils import read_xml_files
 
-jira_proj = os.getenv('JIRA_MIGRATION_JIRA_PROJECT_NAME')
-jira_done_id = os.getenv('JIRA_MIGRATION_JIRA_DONE_ID')
-jira_base_url = os.getenv('JIRA_MIGRATION_JIRA_URL')
-file_names = os.getenv('JIRA_MIGRATION_FILE_PATHS')
 
-project = Project(jira_proj, jira_done_id, jira_base_url)
+def main():
+    config = load_config(required=('file_paths',))
+    project = Project(config)
 
-all_xml_files = read_xml_files(file_names)
+    for f in read_xml_files(config.file_paths):
+        for item in f.channel.item:
+            project.add_item(item)
 
-for f in all_xml_files:
-    for item in f.channel.item:
-        project.add_item(item)
+    for key in sorted(project.get_labels().keys()):
+        print(key)
 
-[print(key) for key in sorted(project.get_labels().keys())]
+
+if __name__ == '__main__':
+    main()

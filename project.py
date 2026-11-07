@@ -1,4 +1,3 @@
-import os
 from collections import defaultdict
 from html.entities import name2codepoint
 from dateutil.parser import parse
@@ -10,15 +9,16 @@ from utils import fetch_labels_mapping, fetch_allowed_labels, convert_label
 
 class Project:
 
-    def __init__(self, name, doneStatusCategoryId, jiraBaseUrl):
-        self.name = name
-        self.doneStatusCategoryId = doneStatusCategoryId
-        self.jiraBaseUrl = jiraBaseUrl
+    def __init__(self, config):
+        self.config = config
+        self.name = config.jira_project
+        self.doneStatusCategoryId = str(config.jira_done_id)
+        self.jiraBaseUrl = config.jira_url_normalized
         self._project = {'Milestones': defaultdict(int), 'Components': defaultdict(
             int), 'Labels': defaultdict(int), 'Types': defaultdict(int), 'Issues': []}
 
-        self.labels_mapping = fetch_labels_mapping()
-        self.approved_labels = fetch_allowed_labels()
+        self.labels_mapping = fetch_labels_mapping(config.labels_mapping_file)
+        self.approved_labels = fetch_allowed_labels(config.allowed_labels_file)
 
     def get_milestones(self):
         return self._project['Milestones']
@@ -139,7 +139,7 @@ class Project:
         if not hasattr(item, 'component') or not item.component:
             item.component = 'miscellaneous'
         for component in item.component:
-            if os.getenv('JIRA_MIGRATION_INCLUDE_COMPONENT_IN_LABELS', 'true') == 'true':
+            if self.config.include_component_in_labels:
                 labels.append('jira-component:' + component.text.lower())
                 labels.append(component.text.lower())
                 print("Debug: component.text.lower = {component.text.lower()}")
