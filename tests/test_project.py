@@ -68,3 +68,16 @@ def test_comments_keep_author_and_timestamp(load_project):
     assert comments[0]['created_at'] == '2025-11-03T12:00:00+00:00'
     assert 'name=carol">carol</a>' in comments[0]['body']
     assert comments[0]['body'].endswith('<p>Confirmed.</p>')
+
+
+def test_html_entities_in_description_are_kept(load_project):
+    body = issue(load_project(), 'TEST-1')['body']
+    assert body.startswith('<p>The tokenizer drops &amp; loses dots.</p>')
+
+
+def test_escaped_markup_is_not_turned_into_tags(make_config):
+    project = Project(make_config())
+    # Jira exports descriptions as HTML; escaped code like Java generics must stay escaped,
+    # otherwise GitHub treats <String> as an (unknown, dropped) HTML tag
+    html = '<pre>List&lt;String&gt; tokens = new ArrayList&lt;&gt;();</pre>'
+    assert project._htmlentitydecode(html) == html

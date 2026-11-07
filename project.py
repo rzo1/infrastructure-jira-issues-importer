@@ -1,10 +1,8 @@
 from collections import defaultdict
-from html.entities import name2codepoint
 from dateutil.parser import parse
 from datetime import datetime
 from html import escape
 from urllib.parse import quote
-import re
 
 from utils import fetch_labels_mapping, fetch_allowed_labels, convert_label
 
@@ -308,8 +306,12 @@ class Project:
                 self._project['Issues'][-1]['epic-link'] = epic_key
 
     def _htmlentitydecode(self, s):
+        """
+        Prepares Jira's HTML for GitHub. The text already is HTML, so entities must stay
+        encoded (decoding would turn escaped code like List&lt;String&gt; into tags).
+        Runs of 8 spaces (Jira's export indentation) are removed so GitHub's Markdown
+        renderer does not turn them into code blocks.
+        """
         if s is None:
             return ''
-        s = s.replace(' ' * 8, '')
-        return re.sub('&(%s);' % '|'.join(name2codepoint),
-                      lambda m: chr(name2codepoint[m.group(1)]), s)
+        return s.replace(' ' * 8, '')
