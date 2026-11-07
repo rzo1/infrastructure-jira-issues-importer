@@ -1,5 +1,8 @@
-import requests
 import time
+from html import escape
+from urllib.parse import quote
+
+import requests
 
 from utils import fetch_labels_mapping, fetch_allowed_labels, convert_label
 
@@ -19,6 +22,7 @@ class Importer:
         self.labels_mapping = fetch_labels_mapping(config.labels_mapping_file)
         self.approved_labels = fetch_allowed_labels(config.allowed_labels_file)
         self._existing_milestones = set()
+        self._imported_keys = {issue['key'] for issue in project.get_issues()}
 
     def _get_all_pages(self, url):
         """GETs a paginated GitHub list resource, following the Link: rel="next" headers."""
@@ -103,10 +107,7 @@ class Importer:
 
             issue_comments = issue['comments']
             del issue['comments']
-            comments = []
-            for comment in issue_comments:
-                comments.append(
-                    dict((k, self._replace_jira_with_github_id(v)) for k, v in comment.items()))
+            comments = list(issue_comments)
 
             self.import_issue_with_comments(issue, comments)
             count += 1
@@ -199,118 +200,25 @@ class Importer:
             )
         return response
 
+    def _issue_href(self, key):
+        """
+        Links to the GitHub issue (searching the key in the title) when the issue is part of
+        this import, otherwise to the issue in Jira.
+        """
+        if key in self._imported_keys:
+            return f'{self.config.github_repo_url}/issues?q=' + quote(f'is:issue in:title "{key}"', safe='')
+        return f'{self.project.jiraBaseUrl}/browse/{quote(key)}'
+
     def convert_relationships_to_comments(self, issue):
-        duplicates = issue['duplicates']
-        is_duplicated_by = issue['is-duplicated-by']
-        relates_to = issue['is-related-to']
-        depends_on = issue['depends-on']
-        blocks = issue['blocks']
-        try:
-            epic_link = issue['epic-link']
-        except (AttributeError, KeyError):
-            epic_link = None
+        """Turns the collected Jira issue links and the epic link into comments."""
+        links = issue.pop('links', [])
+        if links:
+            items = ''.join(f'\n<li>{escape(description)} <a href="{self._issue_href(key)}">{escape(key)}</a></li>'
+                            for description, key in links)
+            issue['comments'].append({'body': f'<i>Jira issue links:</i>\n<ul>{items}\n</ul>'})
 
-        for duplicate_item in duplicates:
-            issue['comments'].append(
-                {"body": f'<i>[Duplicates: <a href="{self.config.github_repo_url}/issues?q=in%3Atitle%20' + self._replace_jira_with_github_id(duplicate_item) + '">' + self._replace_jira_with_github_id(duplicate_item) + '</a>]</i>'})
-
-        for is_duplicated_by_item in is_duplicated_by:
-            issue['comments'].append(
-                {"body": f'<i>[Originally duplicated by: <a href="{self.config.github_repo_url}/issues?q=in%3Atitle%20' + self._replace_jira_with_github_id(is_duplicated_by_item) + '">' + self._replace_jira_with_github_id(is_duplicated_by_item) + '</a>]</i>'})
-
-        for relates_to_item in relates_to:
-            issue['comments'].append(
-                {"body": f'<i>[Originally related to: <a href="{self.config.github_repo_url}/issues?q=in%3Atitle%20' + self._replace_jira_with_github_id(relates_to_item) + '">' + self._replace_jira_with_github_id(relates_to_item) + '</a>]</i>'})
-
-        for depends_on_item in depends_on:
-            issue['comments'].append(
-                {"body": f'<i>[Originally depends on: <a href="{self.config.github_repo_url}/issues?q=in%3Atitle%20' + self._replace_jira_with_github_id(depends_on_item) + '">' + self._replace_jira_with_github_id(depends_on_item) + '</a>]</i>'})
-
-        for blocks_item in blocks:
-            issue['comments'].append(
-                {"body": f'<i>[Originally blocks: <a href="{self.config.github_repo_url}/issues?q=in%3Atitle%20' + self._replace_jira_with_github_id(blocks_item) + '">' + self._replace_jira_with_github_id(blocks_item) + '</a>]</i>'})
-
+        epic_link = issue.pop('epic-link', None)
         if epic_link:
+            # format is parsed by post_process_issues.sh
             issue['comments'].append(
-                {"body": f'<i>[Epic: <a href="{self.config.github_repo_url}/issues?q=in%3Atitle%20' + self._replace_jira_with_github_id(epic_link) + '%20label%3Aepic">' + self._replace_jira_with_github_id(epic_link) + '</a>]</i>'})
-
-        del issue['duplicates']
-        del issue['is-duplicated-by']
-        del issue['is-related-to']
-        del issue['depends-on']
-        del issue['blocks']
-        try:
-            del issue['epic-link']
-        except KeyError:
-            pass
-
-    def _replace_jira_with_github_id(self, text):
-        result = text
-        # for pattern, replacement in self.jira_issue_replace_patterns.items():
-        #     result = re.sub(pattern, Importer._PLACEHOLDER_PREFIX +
-        #                     replacement + Importer._PLACEHOLDER_SUFFIX, result)
-        return result
-
-    # def post_process_comments(self):
-    #     """
-    #     Starts post-processing all issue comments.
-    #     """
-    #     comment_url = self.github_url + '/issues/comments'
-    #     self._post_process_comments(comment_url)
-
-    # def _post_process_comments(self, url):
-    #     """
-    #     Paginates through all issue comments and replaces the issue id placeholders with the correct issue ids.
-    #     """
-    #     print("listing comments using " + url)
-    #     response = requests.get(url, headers=self.headers,
-    #         timeout=Importer._DEFAULT_TIME_OUT)
-    #     if response.status_code != 200:
-    #         raise RuntimeError(
-    #             "Failed to list all comments due to unexpected HTTP status code: {}".format(
-    #                 response.status_code)
-    #         )
-
-    #     comments = response.json()
-    #     for comment in comments:
-    #         print("handling comment " + comment['url'])
-    #         body = comment['body']
-    #         if Importer._PLACEHOLDER_PREFIX in body:
-    #             newbody = self._replace_github_id_placeholder(body)
-    #             self._patch_comment(comment['url'], newbody)
-    #     try:
-    #         next_comments = response.links["next"]
-    #         if next_comments:
-    #             next_url = next_comments['url']
-    #             self._post_process_comments(next_url)
-    #     except KeyError:
-    #         print('no more pages for comments: ')
-    #         for key, value in response.links.items():
-    #             print(key)
-    #             print(value)
-
-    def _replace_github_id_placeholder(self, text):
-        result = text
-        # pattern = Importer._PLACEHOLDER_PREFIX + Importer._GITHUB_ISSUE_PREFIX + \
-        #     r'(\d+)' + Importer._PLACEHOLDER_SUFFIX
-        # result = re.sub(pattern, Importer._GITHUB_ISSUE_PREFIX + r'\1', result)
-        # pattern = Importer._PLACEHOLDER_PREFIX + \
-        #     r'(\d+)' + Importer._PLACEHOLDER_SUFFIX
-        # result = re.sub(pattern, r'\1', result)
-        return result
-
-    # def _patch_comment(self, url, body):
-    #     """
-    #     Patches a single comment body of a Github issue.
-    #     """
-    #     print("patching comment " + url)
-    #     # print("new body:" + body)
-    #     patch_data = {'body': body}
-    #     # print(patch_data)
-    #     response = requests.patch(url, json=patch_data, headers=self.headers,
-    #         timeout=Importer._DEFAULT_TIME_OUT)
-    #     if response.status_code != 200:
-    #         raise RuntimeError(
-    #             "Failed to patch comment {} due to unexpected HTTP status code: {} ; text: {}".format(
-    #                 url, response.status_code, response.text)
-    #         )
+                {'body': f'<i>[Epic: <a href="{self._issue_href(epic_link)}">{escape(epic_link)}</a>]</i>'})

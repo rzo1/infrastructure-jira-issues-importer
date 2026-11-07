@@ -141,6 +141,7 @@
       <attachments>
       </attachments>
       <subtasks>
+        <subtask id="105">TEST-5</subtask>
       </subtasks>
       <customfields>
       </customfields>
@@ -152,6 +153,7 @@
       <link>https://jira.example.org/browse/TEST-4</link>
       <project id="1" key="TEST">Test</project>
       <description>&lt;p&gt;Done long ago.&lt;/p&gt;</description>
+      <parent id="103">TEST-3</parent>
       <key id="104">TEST-4</key>
       <summary>Old wish</summary>
       <type id="5">Wish</type>

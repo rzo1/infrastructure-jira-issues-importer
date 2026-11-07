@@ -64,10 +64,6 @@ class Project:
 
         self._add_labels(item)
 
-        self._add_subtasks(item)
-
-        self._add_parenttask(item)
-
         self._add_comments(item)
 
         self._add_relationships(item)
@@ -147,11 +143,7 @@ class Project:
                                         'closed': closed,
                                         'labels': unique_labels,
                                         'comments': [],
-                                        'duplicates': [],
-                                        'is-duplicated-by': [],
-                                        'is-related-to': [],
-                                        'depends-on': [],
-                                        'blocks': []
+                                        'links': []
                                         })
         if not self._project['Issues'][-1]['closed_at']:
             del self._project['Issues'][-1]['closed_at']
@@ -207,30 +199,6 @@ class Project:
         for kind, candidate in self.label_candidates(item):
             self._project[kinds[kind]][candidate] += 1
 
-    def _add_subtasks(self, item):
-        try:
-            subtaskList = ''
-            for subtask in item.subtasks.subtask:
-                subtaskList = subtaskList + '- ' + subtask + '\n'
-            if subtaskList != '':
-                print('-> subtaskList: ' + subtaskList)
-                self._project['Issues'][-1]['comments'].append(
-                    {"created_at": self._convert_to_iso(item.created.text),
-                     "body": 'Subtasks:\n\n' + subtaskList})
-        except AttributeError:
-            pass
-
-    def _add_parenttask(self, item):
-        try:
-            parentTask = item.parent.text
-            if parentTask != '':
-                print('-> parentTask: ' + parentTask)
-                self._project['Issues'][-1]['comments'].append(
-                    {"created_at": self._convert_to_iso(item.created.text),
-                     "body": 'Subtask of parent task ' + parentTask})
-        except AttributeError:
-            pass
-
     def _add_comments(self, item):
         try:
             for comment in item.comments.comment:
@@ -242,35 +210,32 @@ class Project:
             pass
 
     def _add_relationships(self, item):
-        try:
-            for issuelinktype in item.issuelinks.issuelinktype:
-                for outwardlink in issuelinktype.outwardlinks:
-                    for issuelink in outwardlink.issuelink:
-                        for issuekey in issuelink.issuekey:
-                            tmp_outward = outwardlink.get("description").replace(' ', '-')
-                            if tmp_outward in self._project['Issues'][-1]:
-                                self._project['Issues'][-1][tmp_outward].append(issuekey.text)
-        except AttributeError:
-            pass
-        except KeyError:
-            print('1. KeyError at ' + item.key.text)
-        try:
-            for issuelinktype in item.issuelinks.issuelinktype:
-                for inwardlink in issuelinktype.inwardlinks:
-                    for issuelink in inwardlink.issuelink:
-                        for issuekey in issuelink.issuekey:
-                            tmp_inward = inwardlink.get("description").replace(' ', '-')
-                            if tmp_inward in self._project['Issues'][-1]:
-                                self._project['Issues'][-1][tmp_inward].append(issuekey.text)
-        except AttributeError:
-            pass
-        except KeyError:
-            print('2. KeyError at ' + item.key.text)
+        """
+        Collects all Jira issue links (any link type, outward and inward, using Jira's link
+        description such as "blocks" or "is blocked by"), subtasks, the parent task and the
+        epic link.
+        """
+        links = self._project['Issues'][-1]['links']
+        # Jira's order: per link type, outward before inward
+        for linktype in _children(item, 'issuelinks/issuelinktype'):
+            for direction in ('outwardlinks', 'inwardlinks'):
+                for group in _children(linktype, direction):
+                    description = (group.get('description') or linktype.findtext('name') or 'links to').strip()
+                    for issuekey in _children(group, 'issuelink/issuekey'):
+                        links.append((description, issuekey.text.strip()))
+
+        for subtask in _children(item, 'subtasks/subtask'):
+            if subtask.text and subtask.text.strip():
+                links.append(('has subtask', subtask.text.strip()))
+        parent = _child(item, 'parent')
+        if parent is not None and parent.text and parent.text.strip():
+            links.append(('is subtask of', parent.text.strip()))
 
         for customfield in _children(item, 'customfields/customfield'):
             if customfield.get('key') == 'com.pyxis.greenhopper.jira:gh-epic-link':
-                epic_key = customfield.customfieldvalues.customfieldvalue
-                self._project['Issues'][-1]['epic-link'] = epic_key
+                epic_key = customfield.findtext('customfieldvalues/customfieldvalue')
+                if epic_key and epic_key.strip():
+                    self._project['Issues'][-1]['epic-link'] = epic_key.strip()
 
     def _htmlentitydecode(self, s):
         """
