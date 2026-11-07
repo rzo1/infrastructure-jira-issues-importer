@@ -91,3 +91,18 @@ def test_first_fix_version_becomes_the_milestone(load_project):
     assert issue(project, 'TEST-3')['milestone_name'] == '2.0.0'
     assert 'milestone_name' not in issue(project, 'TEST-2')
     assert dict(project.get_milestones()) == {'1.0.0': 1, '2.0.0': 1}
+
+
+def test_comments_of_configured_authors_are_skipped(load_project):
+    project = load_project(skip_comment_authors=('carol',))
+    comments = issue(project, 'TEST-1')['comments']
+
+    assert len(comments) == 1
+    assert 'name=alice' in comments[0]['body']
+
+
+def test_skip_comment_authors_from_env():
+    from config import load_config
+    config = load_config(env={'JIRA_MIGRATION_JIRA_PROJECT_NAME': 'X', 'JIRA_MIGRATION_JIRA_URL': 'http://j',
+                              'JIRA_MIGRATION_SKIP_COMMENT_AUTHORS': 'githubbot, hudson ,'}, ask=None)
+    assert config.skip_comment_authors == ('githubbot', 'hudson')

@@ -13,6 +13,10 @@ from dataclasses import dataclass
 ENV_PREFIX = 'JIRA_MIGRATION_'
 
 
+def _as_list(value):
+    return tuple(part.strip() for part in str(value).split(',') if part.strip())
+
+
 def _as_bool(value):
     return str(value).strip().lower() in ('1', 'true', 'yes', 'y', 'on')
 
@@ -44,6 +48,9 @@ class Config:
     include_component_in_labels: bool = True
     component_label_prefix: str = 'jira-component:'
     imported_label: str = 'imported-jira-issue'
+
+    # Comments by these Jira users are not migrated (e.g. bots mirroring GitHub PR activity)
+    skip_comment_authors: tuple = ()
 
     # GitHub rejects bodies/comments over 65536 characters; longer texts are truncated
     # (with a link to the full text in Jira). Kept below the limit as a safety margin.
@@ -89,6 +96,7 @@ _FIELDS = {
     'include_component_in_labels': ('INCLUDE_COMPONENT_IN_LABELS', _as_bool),
     'component_label_prefix': ('COMPONENT_LABEL_PREFIX', str),
     'imported_label': ('IMPORTED_LABEL', str),
+    'skip_comment_authors': ('SKIP_COMMENT_AUTHORS', _as_list),
     'max_text_length': ('MAX_TEXT_LENGTH', int),
     'start_from': ('START_FROM', int),
     'mapping_output_file': ('MAPPING_OUTPUT_FILE', str),

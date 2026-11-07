@@ -248,6 +248,8 @@ class Project:
         issue_url = self.jiraBaseUrl + '/browse/' + item.key.text
         for comment in _children(item, 'comments/comment'):
             author = comment.get('author') or 'unknown'
+            if author in self.config.skip_comment_authors:
+                continue
             header = ('<i><a href="' + self.jiraBaseUrl + '/secure/ViewProfile.jspa?name=' + quote(author) + '">'
                       + escape(author) + '</a>:</i>\n')
             comment_url = issue_url + '?focusedCommentId=' + str(comment.get('id')) + '#comment-' + str(comment.get('id'))
