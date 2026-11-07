@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 from dateutil.parser import parse
 from datetime import datetime
@@ -15,6 +16,48 @@ def _child(item, name):
 def _children(item, path):
     """Returns all elements matching ``path`` (may be empty)."""
     return item.findall(path)
+
+
+_VOID_TAGS = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'wbr'}
+_TAG = re.compile(r'<(/?)([a-zA-Z][a-zA-Z0-9]*)\b[^>]*?(/?)>')
+
+
+def _unclosed_tags(html):
+    stack = []
+    for closing, name, self_closing in _TAG.findall(html):
+        name = name.lower()
+        if self_closing or name in _VOID_TAGS:
+            continue
+        if not closing:
+            stack.append(name)
+        elif name in stack:
+            while stack.pop() != name:
+                pass
+    return stack
+
+
+def truncate_html(text, limit, full_text_url):
+    """
+    Cuts ``text`` to at most ``limit`` characters (GitHub rejects longer bodies/comments),
+    without leaving a partial tag/entity, closes still open tags (e.g. a <pre> block) and
+    appends a note linking to the full text.
+    """
+    if len(text) <= limit:
+        return text
+    note = (f'\n\n<i>[truncated, see the full text in Jira: '
+            f'<a href="{full_text_url}">{escape(full_text_url)}</a>]</i>')
+    budget = limit - len(note)
+    while budget > 0:
+        cut = text[:budget]
+        if cut.rfind('<') > cut.rfind('>'):
+            cut = cut[:cut.rfind('<')]
+        cut = re.sub(r'&#?\w*$', '', cut)
+        closers = ''.join(f'</{name}>' for name in reversed(_unclosed_tags(cut)))
+        result = cut + closers + note
+        if len(result) <= limit:
+            return result
+        budget -= len(result) - limit
+    return note[:limit]
 
 
 class Project:
@@ -107,14 +150,14 @@ class Project:
 
         description = _child(item, 'description')
         if description is None or not (description.text or '').strip():
-            body = 'No Description'
+            description_html = 'No Description'
         else:
-            body = self._htmlentitydecode(description.text)
+            description_html = self._htmlentitydecode(description.text)
 
         # metadata: original author & link
         summary = item.title.text[item.title.text.index("]") + 2:]
         reporter = _child(item, 'reporter')
-        body = body + '\n\n---\n<details><summary><i>'
+        body = '\n\n---\n<details><summary><i>'
         if reporter is not None:
             body = body + 'Originally reported by ' + self._user_link(reporter) + ', '
         body = body + 'imported from: <a href="' + self.jiraBaseUrl + '/browse/' + item.key.text + '" target="_blank">' + escape(summary) + '</a></i></summary>'
@@ -131,6 +174,8 @@ class Project:
             body = body + '\n<li><b>resolved</b>: ' + self._convert_to_iso(resolved.text)
         body = body + '\n<li><b>imported</b>: ' + datetime.today().strftime('%Y-%m-%d')
         body = body + '\n</ul></i>\n</details>'
+        issue_url = self.jiraBaseUrl + '/browse/' + item.key.text
+        body = truncate_html(description_html, self.config.max_text_length - len(body), issue_url) + body
 
         unique_labels = self._github_labels(item)
 
@@ -200,14 +245,16 @@ class Project:
             self._project[kinds[kind]][candidate] += 1
 
     def _add_comments(self, item):
-        try:
-            for comment in item.comments.comment:
-                self._project['Issues'][-1]['comments'].append(
-                    {"created_at": self._convert_to_iso(comment.get('created')),
-                     "body": '<i><a href="' + self.jiraBaseUrl + '/secure/ViewProfile.jspa?name=' + comment.get('author') + '">' + comment.get('author') + '</a>:</i>\n' + self._htmlentitydecode(comment.text)
-                     })
-        except AttributeError:
-            pass
+        issue_url = self.jiraBaseUrl + '/browse/' + item.key.text
+        for comment in _children(item, 'comments/comment'):
+            author = comment.get('author') or 'unknown'
+            header = ('<i><a href="' + self.jiraBaseUrl + '/secure/ViewProfile.jspa?name=' + quote(author) + '">'
+                      + escape(author) + '</a>:</i>\n')
+            comment_url = issue_url + '?focusedCommentId=' + str(comment.get('id')) + '#comment-' + str(comment.get('id'))
+            text = truncate_html(self._htmlentitydecode(comment.text),
+                                 self.config.max_text_length - len(header), comment_url)
+            self._project['Issues'][-1]['comments'].append(
+                {"created_at": self._convert_to_iso(comment.get('created')), "body": header + text})
 
     def _add_relationships(self, item):
         """

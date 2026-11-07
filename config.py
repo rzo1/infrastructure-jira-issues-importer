@@ -45,6 +45,10 @@ class Config:
     component_label_prefix: str = 'jira-component:'
     imported_label: str = 'imported-jira-issue'
 
+    # GitHub rejects bodies/comments over 65536 characters; longer texts are truncated
+    # (with a link to the full text in Jira). Kept below the limit as a safety margin.
+    max_text_length: int = 60000
+
     # Run control
     start_from: int = 0
     mapping_output_file: str = 'jira-keys-to-github-id.txt'
@@ -85,6 +89,7 @@ _FIELDS = {
     'include_component_in_labels': ('INCLUDE_COMPONENT_IN_LABELS', _as_bool),
     'component_label_prefix': ('COMPONENT_LABEL_PREFIX', str),
     'imported_label': ('IMPORTED_LABEL', str),
+    'max_text_length': ('MAX_TEXT_LENGTH', int),
     'start_from': ('START_FROM', int),
     'mapping_output_file': ('MAPPING_OUTPUT_FILE', str),
     'assume_yes': ('ASSUME_YES', _as_bool),
