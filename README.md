@@ -38,14 +38,16 @@ Python 3.x scripts for importing JIRA issues in XML format into an existing Gith
 ## Setup
 
 * clone this repository
-* run `pip install -r requirements.txt`
+* install [uv](https://docs.astral.sh/uv/) and run `uv sync`
+  * alternatively, without uv: `pip install -r requirements.txt` (generated via `uv export --no-dev --no-hashes -o requirements.txt`)
+* run the tests with `uv run pytest`
 * edit the `labelcolourselector.py` if you want to change the logic of how the colours are set on labels
 * [create a personal access token in GitHub](https://docs.github.com/en/github/authenticating-to-github/creating-a-personal-access-token) (Be sure to save the token somewhere safe; you will have to enter it later. **Warning:** Treat your tokens like passwords and keep them secret.)
 
 ## Running the tool
 
 * export the desired JIRA issues of your project ([see section below](#export-jira-issues))
-* to start the Github import, execute `python main.py`
+* to start the Github import, execute `uv run main.py`
 * on startup it will ask for
   * the JIRA XML export file name (use a semi-colon to enter multiple XML paths)
   * the JIRA project name
